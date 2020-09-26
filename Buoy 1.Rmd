@@ -1,0 +1,202 @@
+---
+title: "Buoy project"
+author: "ziyi bai"
+date: "2020/9/25"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+## Introduction: What am I supposed to do in this project?
+
+< p style="font-size:20px">
+
+Buoy is a floating device that can be used for navigation, marker, rescue, research, military purposes. In this project, we will use 20 years weather data collected by one weather buoy near Boston to determine whether these data show us the increasing temperature pattern, which can be known as the problem of global warming. If my model shows me an increasing  trend in temperature, then global warming might be an issue that encourage our concern. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(ggplot2)
+library(rstanarm)
+library(tidyverse)
+library(lubridate)
+library(zoo)
+```
+
+## Main Body: describe my approach of analysing
+
+< p style="font-size:20px">
+
+The first step in my project is to collect and reorganize data. We collected data from 1987 to 2016, one of my group mate, zijie huang, was responsible for organizing those data. We calculated the average value of ATMP and WTMP for each month and combine them into a new graph, MR_4.
+
+```{r}
+## clean data
+setwd("/Users/baiziyi/Desktop/MSSP/MA615/buoy/buoy-project")
+MR <- read.csv(file="Buoy_MR.csv", header = TRUE)
+MR_2 <- as_tibble(MR)
+#Change type of Air_tmp and Water_tmp from chr to dbl
+MR_2 <- MR_2 %>%
+  mutate(ATMP = as.double(ATMP),
+         WTMP = as.double(WTMP),
+         YYYY_MM_DD = ymd(paste(YYYY,MM,DD,sep = "-"))) %>%
+  relocate(YYYY_MM_DD)
+
+#Get rid of tittle line
+MR_2 <- filter(MR_2,hh != "hr")
+
+#Get rid of abnormal data
+MR_2 <- filter(MR_2,ATMP < 100, WTMP < 100)
+
+#Get daily average Tmp
+MR_3_1 <- select(MR_2,-c(2,3,4,7)) %>%
+  group_by(YYYY_MM_DD) %>%
+  summarize(Avg_ATMP = mean(ATMP))
+
+MR_3_2 <- select(MR_2,-c(2,3,4,6)) %>%
+  group_by(YYYY_MM_DD) %>%
+  summarize(Avg_WTMP = mean(WTMP))
+
+#Get monthly average Tmp
+MR_4_1 <- MR_3_1 %>%
+  group_by(month = floor_date(YYYY_MM_DD,"month")) %>%
+  summarize(Avg_ATMP = mean(Avg_ATMP))
+
+MR_4_2 <- MR_3_2 %>%
+  group_by(month = floor_date(YYYY_MM_DD,"month")) %>%
+  summarize(Avg_WTMP = mean(Avg_WTMP))
+
+MR_4 <- inner_join(MR_4_1,MR_4_2)
+print(MR_4)
+#Export data
+write_csv(MR_4,"MR_data_1987_2016.csv")
+```
+
+< p style="font-size:20px">
+
+Then, I plotted the data. I plotted the average ATMP and WTMP as y-axis, use month as x-axis using ggplot. It seems that the pattern is messy and it is hard for us to clarify the trend of temperature. Also, we can see that for one year temperature trend, the highest temperature is in July and the lowest is in February. 
+
+```{r}
+##Fit model
+#Plot data
+MR_4 %>%
+  ggplot(aes(x = month,y = Avg_ATMP)) + 
+  geom_line() +
+  geom_point()
+
+MR_4 %>%
+  ggplot(aes(x = month,y = Avg_WTMP)) + 
+  geom_line() +
+  geom_point()
+
+#Check the trend within a year
+MR_1988 <- filter(MR_4,year(month)==1988)
+MR_1988 %>%
+  ggplot(aes(x = month, y = Avg_ATMP)) +
+  geom_line() +
+  geom_point()
+```
+
+< p style="font-size:20px">
+
+Cause these are years long data, so we suppose time series might be helpful. Still, this method just indicated little information about global warming.
+
+```{r}
+###Fit time series model
+#create TS
+TS_MR_4_1 <- ts(select(MR_4_1,Avg_ATMP))
+
+#check trend
+plot(TS_MR_4_1,type="b")
+
+#set seasonal index
+diff12 = diff(TS_MR_4_1,12)
+plot(diff12,type="b")
+
+#check acf pacf
+install.packages('astsa', repos = "http://cran.us.r-project.org")
+library(astsa)
+acf2(diff12,48)
+
+#fit model
+sarima(TS_MR_4_1,1,0,0,0,1,1,12)
+
+#predict
+sarima.for(TS_MR_4_1,24,1,0,0,0,1,1,12)
+
+#repeat process for water_tmp
+TS_MR_4_2 <- ts(select(MR_4_2,Avg_WTMP))
+plot(TS_MR_4_2,type="b")
+diff12 = diff(TS_MR_4_2,12)
+plot(diff12,type="b")
+acf2(diff12,48)
+sarima(TS_MR_4_2,1,0,0,0,1,1,12)
+sarima.for(TS_MR_4_2,24,1,0,0,0,1,1,12)
+```
+
+< p style="font-size:20px">
+
+Finally, I decided to make individual graph of each month to show the trend of ATWP and WTMP. For both ATMP and WTMP, the temperature in winter tends to decreasing and the temperature in summer tends to increasing. The plot shows us a nearly linear relationship, so I will build linear regression model following.
+
+```{r}
+###Fit lm model
+
+#Red indicates an upward trend
+#Blue indicates an downward trend
+
+#plot atmp
+par(mfrow=c(3,4))
+for(i in 1:12){
+  LM_MR_4_1 <- filter(MR_4_1,month(month)==i)
+  LM_1 <- lm(Avg_ATMP~month,data = LM_MR_4_1)
+
+  if(coef(LM_1)[2]>0){
+    plot(x = LM_MR_4_1$month, y =  LM_MR_4_1$Avg_ATMP,xlab = "month", ylab = "ATMP",main = paste("month",i,sep = "_"))
+    abline(coef(LM_1)[1],coef(LM_1)[2], col="RED")
+  
+  }
+  
+  if(coef(LM_1)[2]<0){
+    plot(x = LM_MR_4_1$month, y =  LM_MR_4_1$Avg_ATMP,xlab = "month", ylab = "ATMP",main = paste("month",i,sep = "_"))
+    abline(coef(LM_1)[1],coef(LM_1)[2], col="BLUE")
+  
+  }
+}
+
+#plot water_tmp
+par(mfrow=c(3,4))
+for(i in 1:12){
+  LM_MR_4_2 <- filter(MR_4_2,month(month)==i)
+  LM_2 <- lm(Avg_WTMP~month,data = LM_MR_4_2)
+
+  if(coef(LM_2)[2]>0){
+    plot(x = LM_MR_4_2$month, y =  LM_MR_4_2$Avg_WTMP,xlab = "month", ylab = "WTMP",main = paste("month",i,sep = "_"))
+    abline(coef(LM_2)[1],coef(LM_2)[2], col="RED")
+  
+  }
+  
+  if(coef(LM_2)[2]<0){
+    plot(x = LM_MR_4_2$month, y =  LM_MR_4_2$Avg_WTMP,xlab = "month", ylab = "WTMP",main = paste("month",i,sep = "_"))
+    abline(coef(LM_2)[1],coef(LM_2)[2], col="BLUE")
+  
+  }
+}
+
+```
+
+## Conclusion 
+
+< p style="font-size:20px">
+
+To conclude, 20 or 30 years of data in Boston is still not enough to make more accurate prediction, But as I indicated in the previous chunk, red line means an upward trend of temperature. Those graphs show us that air and water temperatures in Boston tend to increasing in the summer. So, global warming maybe an issue that society needs to take into consideration. 
+
+
+## Reference
+
+2020. Knitr, Rstudio. Beijing.
+2020. ggplot2, Rstudio. Beijing.
+2020. rstanarm, Rstudio. Beijing.
+2020. tidyverse, Rstudio. Beijing.
+2020. lubridate, Rstudio. Beijing.
+2020. zoo, Rstudio. Beijing.
+2020. astsa, Rstudio. Beijing.
